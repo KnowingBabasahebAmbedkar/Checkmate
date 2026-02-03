@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Checkmate - 3D GIS Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        }
+
+        #container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #info-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 12px;
+            color: white;
+            max-width: 300px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #info-panel h1 {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+            color: #00d4ff;
+        }
+
+        #info-panel p {
+            font-size: 0.9em;
+            color: #ccc;
+            line-height: 1.5;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            padding: 15px 25px;
+            border-radius: 30px;
+            color: white;
+            display: flex;
+            gap: 20px;
+            align-items: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .control-btn {
+            background: rgba(0, 212, 255, 0.2);
+            border: 1px solid #00d4ff;
+            color: #00d4ff;
+            padding: 10px 20px;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+        }
+
+        .control-btn:hover {
+            background: #00d4ff;
+            color: #1a1a2e;
+        }
+
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 1.5em;
+            text-align: center;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(0, 212, 255, 0.3);
+            border-top: 4px solid #00d4ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        #coordinates {
+            position: absolute;
+            bottom: 80px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 15px;
+            border-radius: 8px;
+            color: #00d4ff;
+            font-family: monospace;
+            font-size: 0.85em;
+        }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        Loading 3D Model...
+    </div>
+
+    <div id="info-panel">
+        <h1>Checkmate</h1>
+        <p>3D GIS Model Viewer</p>
+        <p style="margin-top: 10px; font-size: 0.8em;">
+            <strong>Controls:</strong><br>
+            - Left click + drag: Rotate<br>
+            - Right click + drag: Pan<br>
+            - Scroll: Zoom
+        </p>
+    </div>
+
+    <div id="controls">
+        <button class="control-btn" onclick="resetCamera()">Reset View</button>
+        <button class="control-btn" onclick="toggleWireframe()">Wireframe</button>
+        <button class="control-btn" onclick="toggleAutoRotate()">Auto Rotate</button>
+        <button class="control-btn" onclick="toggleFullscreen()">Fullscreen</button>
+    </div>
+
+    <div id="coordinates">
+        Camera: <span id="cam-pos">0, 0, 0</span>
+    </div>
+
+    <!-- Import Maps for ES Modules -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        let scene, camera, renderer, controls, model;
+        let wireframeMode = false;
+        let originalMaterials = new Map();
+
+        init();
+        animate();
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a2e);
+
+            // No fog - clear view at all distances
+
+            // Camera - extended far plane for large models
+            camera = new THREE.PerspectiveCamera(
+                60,
+                window.innerWidth / window.innerHeight,
+                0.1,
+                100000
+            );
+            camera.position.set(50, 50, 50);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.2;
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // Controls
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.screenSpacePanning = true;
+            controls.minDistance = 1;
+            controls.maxDistance = 500;
+            controls.maxPolarAngle = Math.PI;
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(50, 100, 50);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+
+            const hemisphereLight = new THREE.HemisphereLight(0x87CEEB, 0x8B4513, 0.6);
+            scene.add(hemisphereLight);
+
+            // Grid Helper - positioned below the model
+            const gridHelper = new THREE.GridHelper(200, 50, 0x00d4ff, 0x333333);
+            gridHelper.position.y = -50;
+            scene.add(gridHelper);
+
+            // Axes Helper
+            const axesHelper = new THREE.AxesHelper(20);
+            scene.add(axesHelper);
+
+            // Load GLB Model
+            const loader = new GLTFLoader();
+            loader.load(
+                './Checkmate.glb',
+                function (gltf) {
+                    model = gltf.scene;
+
+                    // Center the model
+                    const box = new THREE.Box3().setFromObject(model);
+                    const center = box.getCenter(new THREE.Vector3());
+                    const size = box.getSize(new THREE.Vector3());
+
+                    // Center horizontally but keep vertical position
+                    model.position.x = -center.x;
+                    model.position.z = -center.z;
+                    model.position.y = -box.min.y; // Place model on top of origin
+
+                    // No scaling - keep original size
+
+                    // Enable shadows and store materials
+                    model.traverse((child) => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                            originalMaterials.set(child, child.material.clone());
+                        }
+                    });
+
+                    scene.add(model);
+
+                    // Adjust camera to fit model - position above and looking down
+                    const newBox = new THREE.Box3().setFromObject(model);
+                    const newSize = newBox.getSize(new THREE.Vector3());
+                    const newCenter = newBox.getCenter(new THREE.Vector3());
+
+                    // Calculate diagonal distance to ensure full model is visible
+                    const diagonal = Math.sqrt(
+                        newSize.x * newSize.x +
+                        newSize.y * newSize.y +
+                        newSize.z * newSize.z
+                    );
+
+                    // Position camera far enough to see entire model
+                    const cameraDistance = diagonal * 1.5;
+                    camera.position.set(cameraDistance, cameraDistance * 0.8, cameraDistance);
+                    controls.target.copy(newCenter);
+                    controls.update();
+
+                    // Extend max distance for zooming out
+                    controls.maxDistance = diagonal * 5;
+
+                    // Move grid below the model
+                    gridHelper.position.y = newBox.min.y - 1;
+
+                    console.log('Model size:', newSize);
+                    console.log('Camera distance:', cameraDistance);
+
+                    // Hide loading
+                    document.getElementById('loading').style.display = 'none';
+
+                    console.log('Model loaded successfully!');
+                },
+                function (xhr) {
+                    const percent = (xhr.loaded / xhr.total * 100).toFixed(0);
+                    document.getElementById('loading').innerHTML = `
+                        <div class="spinner"></div>
+                        Loading 3D Model... ${percent}%
+                    `;
+                },
+                function (error) {
+                    console.error('Error loading model:', error);
+                    document.getElementById('loading').innerHTML = `
+                        <p style="color: #ff4444;">Error loading model</p>
+                        <p style="font-size: 0.8em; margin-top: 10px;">
+                            Make sure "Checkmate.glb" is in the same directory
+                        </p>
+                    `;
+                }
+            );
+
+            // Window resize handler
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            // Update camera position display
+            const pos = camera.position;
+            document.getElementById('cam-pos').textContent =
+                `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`;
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Global functions for buttons
+        window.resetCamera = function() {
+            if (model) {
+                const box = new THREE.Box3().setFromObject(model);
+                const size = box.getSize(new THREE.Vector3());
+                const center = box.getCenter(new THREE.Vector3());
+                const diagonal = Math.sqrt(size.x * size.x + size.y * size.y + size.z * size.z);
+                const cameraDistance = diagonal * 1.5;
+
+                camera.position.set(cameraDistance, cameraDistance * 0.8, cameraDistance);
+                controls.target.copy(center);
+                controls.update();
+            }
+        };
+
+        window.toggleWireframe = function() {
+            wireframeMode = !wireframeMode;
+            if (model) {
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        if (wireframeMode) {
+                            child.material = new THREE.MeshBasicMaterial({
+                                color: 0x00d4ff,
+                                wireframe: true
+                            });
+                        } else {
+                            child.material = originalMaterials.get(child).clone();
+                        }
+                    }
+                });
+            }
+        };
+
+        window.toggleAutoRotate = function() {
+            controls.autoRotate = !controls.autoRotate;
+            controls.autoRotateSpeed = 2.0;
+        };
+
+        window.toggleFullscreen = function() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        };
+    </script>
+</body>
+</html>
